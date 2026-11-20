@@ -1,4 +1,4 @@
-// Token Radar dashboard (model radar-2). It reads window.RADAR (written beside
+// Token Radar dashboard (model radar-3). It reads window.RADAR (written beside
 // dashboard/ by main.ts) and renders the ranked board, a Top 10 spotlight, a
 // filterable sortable table, a per-protocol detail drawer with the model's own
 // inputs and the protocol's farm plan, and the full methodology. No network:
@@ -439,7 +439,7 @@
         el('b', { text: 'Why the clamp. ' }),
         'Above 1.00x, a launch would be worth more than the value locked in the protocol — no comparable supports that. ',
         el('b', { text: 'Floor and early rows. ' }),
-        'The watchlist (TVL at or above $' + Math.round(DATA.floor_usd / 1e6) + 'M, no token on record, not a wrapped, staked or bridged product) is the floor; the early radar adds ' + DATA.early_size + ' pre-token protocols below it by TVL. ',
+        'The watchlist (TVL at or above $' + Math.round(DATA.floor_usd / 1e6) + 'M, no token on record, not a wrapped, staked or bridged product) is the floor; the early radar adds ' + DATA.early_size + ' pre-token protocols below it by TVL, held to the same rule — a bridge, a liquid-staking receipt or any other wrapped or staked product of a token that already trades is set aside, never ranked as a launch. ',
         el('b', { text: 'Live tokens. ' }),
         'Protocols whose token already trades are set aside with their market caps and never ranked — they are the comparables, not the candidates. “No token” always means “no token on record”.'
       )

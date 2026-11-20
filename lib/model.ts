@@ -1,11 +1,17 @@
-// Token Radar model v2 ("radar-2"): comparable multiples, not a flat TVL haircut.
+// Token Radar model v3 ("radar-3"): comparable multiples, not a flat TVL haircut.
 //
 // The board covers every slug in the snapshot's watchlist (the floor, never a
 // ceiling) plus pre-token protocols below the watchlist floor: the early rows
 // the radar exists to find. A protocol is pre-token when its record carries no
 // token (no market cap, no CoinGecko id, no symbol); live-token protocols are
 // kept apart and shown with the market's own values, never mixed into the
-// ranked board.
+// ranked board. Wrapped, staked and bridged products are set aside with them:
+// a receipt for a token that already trades is not a launch candidate, so the
+// early radar applies the watchlist's own rule — no Bridge, Canonical Bridge,
+// Liquid Staking, Liquid Restaking or Restaked BTC category, no whole word
+// wrapped, staked or staking in the name, and no exchange's name at the
+// start — instead of ranking bridges and liquid-staking receipts beside
+// protocols whose token does not exist yet.
 //
 // Implied value follows only from the snapshot's own figures:
 //
@@ -87,7 +93,7 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it. */
-export const MODEL_VERSION = 'radar-2';
+export const MODEL_VERSION = 'radar-3';
 
 /** How many pre-token protocols below the watchlist floor the early radar carries, by TVL. */
 export const EARLY_ROWS = 200;
@@ -322,9 +328,29 @@ export function isPreToken(p: SnapshotProtocol): boolean {
   return p.mcap_usd === null && p.gecko_id === null && p.symbol === null;
 }
 
-/** Whether a protocol is one the board may rank: pre-token, not an exchange, not a versioned pool. */
+/**
+ * The watchlist's own wrapped/staked/bridged rule, applied to the early radar
+ * too: a receipt for a token that already trades is not a launch candidate.
+ * Categories that only move another token across, stake it or restake it; a
+ * whole word wrapped, staked or staking in the name; or a name that begins
+ * with an exchange's name. The rule is the house's watchlist rule, word for
+ * word, so the early rows a reader finds are held to the same bar as the
+ * watchlist itself.
+ */
+const WRAPPED_CATEGORIES = new Set(['Bridge', 'Canonical Bridge', 'Liquid Staking', 'Liquid Restaking', 'Restaked BTC', 'CEX']);
+const WRAPPED_WORD = /\b(wrapped|staked|staking)\b/i;
+const EXCHANGE_PREFIXES = ['binance', 'coinbase', 'bybit', 'kraken', 'bitget', 'okx', 'bitfinex', 'gemini'];
+
+export function isWrappedOrStakedProduct(p: SnapshotProtocol): boolean {
+  if (WRAPPED_CATEGORIES.has(p.category ?? '')) return true;
+  if (WRAPPED_WORD.test(p.name)) return true;
+  const lower = p.name.toLowerCase();
+  return EXCHANGE_PREFIXES.some((prefix) => lower.startsWith(prefix));
+}
+
+/** Whether a protocol is one the board may rank: pre-token, not an exchange, not a versioned pool, not a wrapped, staked or bridged product. */
 export function isRankable(p: SnapshotProtocol): boolean {
-  return isPreToken(p) && p.category !== 'CEX' && !VERSIONED.test(p.name);
+  return isPreToken(p) && p.category !== 'CEX' && !VERSIONED.test(p.name) && !isWrappedOrStakedProduct(p);
 }
 
 /** The snapshot's protocol by slug. */

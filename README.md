@@ -4,7 +4,7 @@
 [![rank](https://make.fun/badge/token-radar-01/slow-respon/token-launch-radar/rank.svg)](https://make.fun/bounty/token-radar-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
 [![reward](https://make.fun/badge/token-radar-01/slow-respon/token-launch-radar/reward.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
 
-Token Radar ranks pre-token protocols by implied launch value and shows how to farm each one. It reads a sealed DefiLlama snapshot (758 protocols, 40 on the watchlist), prices every pre-token protocol from live-token comparables in the same snapshot, and writes a static offline dashboard: a Top 10 spotlight, a sortable and filterable board, a detail view per protocol with the full model breakdown, and a 7-step farm plan per protocol.
+Token Radar ranks pre-token protocols by implied launch value and shows how to farm each one. It reads a sealed DefiLlama snapshot (758 protocols, 40 on the watchlist), prices every pre-token protocol from live-token comparables in the same snapshot, and writes a static offline dashboard: a Top 10 spotlight, a sortable and filterable board, a detail view per protocol with the full model breakdown, and a 7-step farm plan per protocol. Wrapped, staked and bridged products are set aside with the live tokens — a receipt for a token that already trades is not a launch candidate — so the board holds only protocols whose token does not exist yet.
 
 ## Run it
 
@@ -14,7 +14,7 @@ mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts --input /path/to/snapshot.js
 
 Node.js 22.18 or later, standard library only, no network. The program writes `out/board.json`, `out/data.js`, `out/dashboard/`, `out/screenshots/` and `out/dossier.json`. Run it twice and the outputs are byte-identical.
 
-## The model (radar-2)
+## The model (radar-3)
 
 Implied value is computed from the snapshot's own figures only — no protocol is ever special-cased by name:
 
@@ -29,7 +29,7 @@ implied            = round(tvl_usd * multiple(category) * growthMult * maturityM
 
 On this snapshot the global median is 0.246x; 13 categories are priced from their own live peers (for example Dexs 0.34x, Lending 0.13x, RWA 0.27x, Liquid Staking 0.04x) and the rest inherit the global median, flagged as a fallback in the dashboard. Medians, not means: a few live tokens trade at extreme mcap/TVL ratios, and a mean would let one outlier price a whole category. The clamp keeps a launch from being valued above the value locked in the protocol.
 
-The board covers all 40 watchlist protocols plus 186 pre-token protocols below the $50M floor, ranked by implied value (226 rows). Live-token protocols are set aside with their market caps — they are the comparables, not the candidates. "No token" always means "no token on record".
+The board covers all 40 watchlist protocols plus 138 pre-token protocols below the $50M floor, ranked by implied value (178 rows). Wrapped, staked and bridged products are excluded from the early radar by the watchlist's own rule — no Bridge, Canonical Bridge, Liquid Staking, Liquid Restaking or Restaked BTC category, no whole word wrapped, staked or staking in the name, no exchange's name at the start — because their value is the token that already trades. Live-token protocols are set aside with their market caps — they are the comparables, not the candidates. "No token" always means "no token on record".
 
 ## Farm plans
 
