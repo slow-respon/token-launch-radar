@@ -1,7 +1,8 @@
-// Token Radar dashboard (model radar-3). It reads window.RADAR (written beside
+// Token Radar dashboard (model radar-4). It reads window.RADAR (written beside
 // dashboard/ by main.ts) and renders the ranked board, a Top 10 spotlight, a
 // filterable sortable table, a per-protocol detail drawer with the model's own
-// inputs and the protocol's farm plan, and the full methodology. No network:
+// inputs, confidence and risk, the protocol's farm plan and farm budget, a
+// two-protocol comparison, and the full methodology. No network:
 // every byte it shows is in data.js. The page recomputes each row's implied
 // value from the snapshot figures (impliedOf) and says whether it matches the
 // number board.json carries, so the page's code and the board's data are
@@ -33,15 +34,23 @@
   }
   function fmtMult(n) { return (Math.round(n * 10000) / 10000).toFixed(2) + 'x'; }
 
-  // The model in one function: comparable multiple x growth x maturity.
+  // The model in one function: comparable multiple x growth x maturity x risk.
   // row.base_multiple is the category's median mcap/TVL (or the global median
   // fallback) computed by lib/model.ts computeMultiples from this snapshot.
+  // Momentum is asymmetric (a falling TVL discounts harder than a rising one
+  // boosts) and the risk haircut prices what the snapshot does not say:
+  // a fallback multiple, an unknown age, a missing 7-day change.
   function impliedOf(row, model) {
     var growth = Math.min(model.growth_cap, Math.max(model.growth_floor, row.change_7d === null || row.change_7d === undefined ? 0 : row.change_7d));
-    var growthMult = 1 + (growth / 100) * model.growth_weight;
+    var growthMult = 1 + (growth / 100) * (growth >= 0 ? model.momentum_up : model.momentum_down);
     var age = row.age_days === null || row.age_days === undefined ? model.unknown_age_days : row.age_days;
     var maturity = model.maturity_floor + (Math.min(Math.max(age, 0), model.maturity_days) / model.maturity_days) * model.maturity_range;
-    return Math.max(1, Math.round(row.tvl_usd * row.base_multiple * growthMult * maturity));
+    var risk = 1;
+    if (row.multiple_fallback) risk *= model.fallback_haircut;
+    if (row.age_days === null || row.age_days === undefined) risk *= model.unknown_age_haircut;
+    if (row.change_7d === null || row.change_7d === undefined) risk *= model.missing_growth_haircut;
+    risk = Math.max(model.risk_floor, risk);
+    return Math.max(1, Math.round(row.tvl_usd * row.base_multiple * growthMult * maturity * risk));
   }
 
   function el(tag, attrs) {
@@ -219,6 +228,7 @@
       else if (key === 'growth') { av = a.change_7d === null ? -Infinity : a.change_7d; bv = b.change_7d === null ? -Infinity : b.change_7d; }
       else if (key === 'age') { av = a.age_days === null ? Infinity : a.age_days; bv = b.age_days === null ? Infinity : b.age_days; }
       else if (key === 'multiple') { av = a.base_multiple; bv = b.base_multiple; }
+      else if (key === 'confidence') { av = a.confidence; bv = b.confidence; }
       else { av = a.implied_value_usd; bv = b.implied_value_usd; }
       if (av < bv) return -state.dir;
       if (av > bv) return state.dir;
@@ -342,9 +352,13 @@
           el('span', { class: 'sub', text: (r.category || 'Other') + ' on ' + (r.chains && r.chains.length ? r.chains.slice(0, 2).join(', ') : 'an unnamed chain') })
         )),
         el('td', { class: 'num', text: fmtUsd(r.tvl_usd) }),
-        el('td', { class: 'num ' + growthClass, text: growth }),
+        el('td', { class: 'num' }, el('div', { class: 'mom' },
+          el('span', { class: 'mom-bar ' + growthClass, 'aria-hidden': 'true' }, el('i', { style: 'width:' + (r.change_7d === null ? 0 : Math.min(100, Math.round(Math.abs(r.change_7d) / 120 * 100))) + '%' })),
+          el('span', { class: growthClass, text: growth })
+        )),
         el('td', { class: 'num', text: fmtAge(r.age_days) }),
         el('td', { class: 'num', text: fmtMult(r.base_multiple) }),
+        el('td', { class: 'num', text: String(r.confidence) }),
         el('td', null, el('div', { class: 'implied' },
           el('div', { class: 'bar', 'aria-hidden': 'true' }, el('i', { style: 'width:' + Math.max(3, Math.round((r.implied_value_usd / max) * 100)) + '%' })),
           el('span', { class: 'num', text: fmtUsd(r.implied_value_usd) })
@@ -364,6 +378,7 @@
             sortHeader('growth', '7d'),
             sortHeader('age', 'Age'),
             sortHeader('multiple', 'Multiple'),
+            sortHeader('confidence', 'Conf.'),
             sortHeader('implied', 'Implied value'),
             el('th', { scope: 'col', text: 'Token' })
           )),
@@ -400,10 +415,16 @@
     var rows = (DATA.multiples || []).slice().sort(function (a, b) { return b.multiple - a.multiple || (a.category < b.category ? -1 : 1); });
     var tbody = el('tbody');
     rows.forEach(function (m) {
+      var range = (m.p25 === null || m.p25 === undefined || m.p75 === null || m.p75 === undefined)
+        ? el('span', { class: 'sub', text: 'no live peers' })
+        : el('div', { class: 'range-bar', title: 'Peer mcap/TVL from ' + fmtMult(m.p25) + ' to ' + fmtMult(m.p75) },
+          el('i', { style: 'left:' + (m.p25 * 100).toFixed(1) + '%;width:' + Math.max(2, (m.p75 - m.p25) * 100).toFixed(1) + '%' }),
+          el('b', { style: 'left:' + (m.multiple * 100).toFixed(1) + '%' }));
       tbody.appendChild(el('tr', null,
         el('td', { text: m.category }),
         el('td', { class: 'num', text: fmtMult(m.multiple) }),
         el('td', { class: 'num', text: String(m.sample) }),
+        el('td', null, range),
         el('td', { class: 'sub', text: m.fallback ? 'global median fallback' : 'category median' })
       ));
     });
@@ -413,6 +434,7 @@
           el('th', { scope: 'col', text: 'Category' }),
           el('th', { scope: 'col', class: 'num', text: 'Multiple' }),
           el('th', { scope: 'col', class: 'num', text: 'Live peers' }),
+          el('th', { scope: 'col', text: 'Peer range (p25–p75)' }),
           el('th', { scope: 'col', text: 'Source' })
         )),
         tbody
@@ -426,10 +448,12 @@
       el('h2', { text: 'How implied value is computed — model ' + DATA.model_version }),
       el('p', { class: 'sub', text: 'One function scores every row. No protocol name is special-cased, and no row is hand-picked.' }),
       el('div', { class: 'formula' },
-        el('div', null, el('b', { text: 'implied = round( tvl_usd x multiple(category) x growthMult x maturityMult )' })),
+        el('div', null, el('b', { text: 'implied = round( tvl_usd x multiple(category) x growthMult x maturityMult x riskMult )' })),
         el('div', { text: 'multiple(category) = median(mcap / TVL) of live-token peers in the same category, clamped to [' + m.multiple_min + ', ' + m.multiple_max + ']; fewer than ' + m.min_sample + ' peers falls back to the global median ' + fmtMult(DATA.global_multiple) + '.' }),
-        el('div', { text: 'growthMult = 1 + clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ') / 100 x ' + m.growth_weight }),
-        el('div', { text: 'maturityMult = ' + m.maturity_floor + ' + min(age_days, ' + m.maturity_days + ') / ' + m.maturity_days + ' x ' + m.maturity_range + '   (unknown age: ' + m.unknown_age_days + ' days)' })
+        el('div', { text: 'growthMult = 1 + clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ') / 100 x ' + m.momentum_up + ' when rising, x ' + m.momentum_down + ' when falling — momentum is asymmetric: a shrinking TVL discounts harder.' }),
+        el('div', { text: 'maturityMult = ' + m.maturity_floor + ' + min(age_days, ' + m.maturity_days + ') / ' + m.maturity_days + ' x ' + m.maturity_range + '   (unknown age: ' + m.unknown_age_days + ' days)' }),
+        el('div', { text: 'riskMult = ' + m.fallback_haircut + ' when the multiple is a global fallback, x ' + m.unknown_age_haircut + ' when age is unknown, x ' + m.missing_growth_haircut + ' when the 7-day change is missing — floored at ' + m.risk_floor + '.' }),
+        el('div', { text: 'confidence = 100 - 25 (fallback multiple) - 15 (unknown age) - 10 (missing 7-day change).' })
       ),
       el('h3', { text: 'Comparable multiples by category' }),
       multiplesTable(),
@@ -441,7 +465,9 @@
         el('b', { text: 'Floor and early rows. ' }),
         'The watchlist (TVL at or above $' + Math.round(DATA.floor_usd / 1e6) + 'M, no token on record, not a wrapped, staked or bridged product) is the floor; the early radar adds ' + DATA.early_size + ' pre-token protocols below it by TVL, held to the same rule — a bridge, a liquid-staking receipt or any other wrapped or staked product of a token that already trades is set aside, never ranked as a launch. ',
         el('b', { text: 'Live tokens. ' }),
-        'Protocols whose token already trades are set aside with their market caps and never ranked — they are the comparables, not the candidates. “No token” always means “no token on record”.'
+        'Protocols whose token already trades are set aside with their market caps and never ranked — they are the comparables, not the candidates. “No token” always means “no token on record”. ',
+        el('b', { text: 'Confidence and peer range. ' }),
+        'Every row carries a confidence score out of 100: a row priced from its own live peers, with a known age and a known 7-day change, scores 100; a fallback multiple costs 25, an unknown age 15, a missing 7-day change 10. The multiples table shows each category’s peer range (p25–p75) with the median marked, so the spread behind every multiple is visible.'
       )
     );
   }
@@ -455,9 +481,53 @@
     return found;
   }
 
+  // ---- Compare two protocols, side by side, from the Top 20 ----
+  var compareSlug = null;
+  function compareSection(row) {
+    var top = DATA.rows.slice().sort(function (a, b) { return a.rank - b.rank; }).slice(0, 20).filter(function (r) { return r.slug !== row.slug; });
+    var select = el('select', { 'aria-label': 'Compare with another protocol' },
+      el('option', { value: '', text: 'Pick a protocol to compare…' }),
+      top.map(function (r) { return el('option', { value: r.slug, text: '#' + r.rank + ' ' + r.name, selected: compareSlug === r.slug ? 'selected' : null }); })
+    );
+    select.addEventListener('change', function () { compareSlug = select.value || null; openDetail(row.slug); });
+    var section = el('section', { class: 'detail-section' },
+      el('h3', { text: 'Compare — two protocols, side by side' }),
+      el('div', { class: 'field' }, select)
+    );
+    if (compareSlug) {
+      var other = DATA.rows.filter(function (r) { return r.slug === compareSlug; })[0];
+      if (other) {
+        var cmpRows = [
+          ['Implied value', fmtUsd(row.implied_value_usd), fmtUsd(other.implied_value_usd)],
+          ['TVL', fmtUsd(row.tvl_usd), fmtUsd(other.tvl_usd)],
+          ['Category multiple', fmtMult(row.base_multiple), fmtMult(other.base_multiple)],
+          ['7-day change', fmtPct(row.change_7d), fmtPct(other.change_7d)],
+          ['Growth multiplier', String(row.growth_multiplier), String(other.growth_multiplier)],
+          ['Maturity multiplier', String(row.maturity_multiplier), String(other.maturity_multiplier)],
+          ['Risk multiplier', String(row.risk_multiplier), String(other.risk_multiplier)],
+          ['Confidence', row.confidence + ' / 100', other.confidence + ' / 100'],
+          ['Farm total', row.farm_budget ? '≈ $' + row.farm_budget.total_usd : 'n/a', other.farm_budget ? '≈ $' + other.farm_budget.total_usd : 'n/a']
+        ];
+        var tbody = el('tbody');
+        cmpRows.forEach(function (c) {
+          tbody.appendChild(el('tr', null, el('td', { text: c[0] }), el('td', { class: 'num', text: c[1] }), el('td', { class: 'num', text: c[2] })));
+        });
+        section.appendChild(el('div', { class: 'table-wrap' },
+          el('table', { class: 'cmp-table' },
+            el('thead', null, el('tr', null, el('th', { scope: 'col', text: '' }), el('th', { scope: 'col', text: row.name }), el('th', { scope: 'col', text: other.name }))),
+            tbody
+          )
+        ));
+        section.appendChild(el('button', { class: 'button', type: 'button', text: 'Clear comparison', onclick: function () { compareSlug = null; openDetail(row.slug); } }));
+      }
+    }
+    return section;
+  }
+
   function openDetail(slug) {
     var row = DATA.rows.filter(function (r) { return r.slug === slug; })[0];
     if (!row) return;
+    if (state.selected !== slug) compareSlug = null;
     state.selected = slug;
     writeHash();
     dialog.textContent = '';
@@ -482,6 +552,8 @@
         el('div', null, el('span', { text: 'Growth multiplier' }), el('b', { class: 'num', text: String(row.growth_multiplier) })),
         el('div', null, el('span', { text: 'Age with no token' }), el('b', { class: 'num', text: fmtAge(row.age_days) })),
         el('div', null, el('span', { text: 'Maturity multiplier' }), el('b', { class: 'num', text: String(row.maturity_multiplier) })),
+        el('div', null, el('span', { text: 'Risk multiplier' }), el('b', { class: 'num', text: String(row.risk_multiplier) })),
+        el('div', null, el('span', { text: 'Confidence' }), el('b', { class: 'num', text: row.confidence + ' / 100' })),
         el('div', null, el('span', { text: 'Implied value' }), el('b', { class: 'num', text: fmtUsd(row.implied_value_usd) }))
       ),
       el('p', { class: 'sub', text: 'Model ' + DATA.model_version + ': the page recomputes this row as ' + fmtUsd(recomputed) + (Math.abs(recomputed - row.implied_value_usd) <= 1 ? ', the same number board.json carries.' : ', which differs from the board: the data would be stale.') + ' This is an estimate, not a price, and not a prediction that a token launches.' })
@@ -495,6 +567,21 @@
         return el('li', null, el('b', { text: action }), el('span', { class: 'cost', text: tail }));
       }))
     ));
+    var budget = row.farm_budget;
+    if (budget) {
+      dialog.appendChild(el('section', { class: 'detail-section' },
+        el('h3', { text: 'Farm budget — the whole position' }),
+        el('div', { class: 'budget' },
+          el('div', null, el('span', { text: 'Capital' }), el('b', { class: 'num', text: fmtUsd(budget.capital_usd) })),
+          el('div', null, el('span', { text: 'Gas, all steps' }), el('b', { class: 'num', text: '≈ $' + budget.gas_usd })),
+          el('div', null, el('span', { text: 'Setup time' }), el('b', { class: 'num', text: budget.setup_minutes + ' min' })),
+          el('div', null, el('span', { text: 'Hold' }), el('b', { class: 'num', text: budget.hold_days + ' days' })),
+          el('div', null, el('span', { text: 'Total to farm' }), el('b', { class: 'num', text: '≈ $' + budget.total_usd }))
+        ),
+        el('p', { class: 'sub', text: 'Capital plus the gas of every step, for the full hold. A farm is a concrete amount before it is a hope.' })
+      ));
+    }
+    dialog.appendChild(compareSection(row));
     if (typeof dialog.showModal === 'function') {
       if (!dialog.open) dialog.showModal();
     } else {

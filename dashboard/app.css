@@ -158,6 +158,33 @@ tbody tr[data-selected="true"] { background: #152a24; }
 .steps b { display: block; font-weight: 550; }
 .cost { color: var(--muted); font-size: 12px; font-family: var(--font-num); }
 
+/* Momentum bar: the 7-day change as a bar, not just a number. */
+.mom { display: flex; align-items: center; gap: var(--s2); }
+.mom-bar { width: 44px; height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; flex: none; }
+.mom-bar i { display: block; height: 100%; background: var(--muted); }
+.mom-bar.pos i { background: var(--positive); }
+.mom-bar.neg i { background: var(--negative); }
+
+/* Peer range: the p25–p75 spread behind a category's multiple, median marked. */
+.range-bar { position: relative; width: 120px; height: 8px; border-radius: 4px; background: var(--border); }
+.range-bar i { position: absolute; top: 0; height: 100%; border-radius: 4px; background: var(--accent-dim); }
+.range-bar b { position: absolute; top: -3px; width: 2px; height: 14px; background: var(--gold); }
+
+/* Farm budget: one box with the whole position's cost. */
+.budget { display: grid; gap: var(--s2); font-family: var(--font-num); font-size: 13px; background: var(--canvas); border: 1px solid var(--border); border-radius: var(--radius-control); padding: var(--s3) var(--s4); }
+.budget div { display: flex; justify-content: space-between; gap: var(--s3); }
+.budget span { color: var(--muted); }
+
+/* Compare table: two protocols side by side in the detail drawer. */
+.cmp-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: var(--s3); }
+.cmp-table th, .cmp-table td { padding: 7px var(--s3); border-bottom: 1px solid var(--border); text-align: left; }
+.cmp-table td.num, .cmp-table th.num { text-align: right; }
+.detail-section .button { margin-top: var(--s3); }
+.detail-section select { min-height: 38px; padding: 0 var(--s3); border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); width: 100%; }
+
+/* Sticky table header: the column names stay visible while scrolling the board. */
+.table-wrap thead th { position: sticky; top: 0; background: var(--surface); z-index: 2; }
+
 @media (max-width: 1000px) {
   .spot-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

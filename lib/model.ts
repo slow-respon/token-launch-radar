@@ -1,4 +1,4 @@
-// Token Radar model v3 ("radar-3"): comparable multiples, not a flat TVL haircut.
+// Token Radar model v4 ("radar-4"): comparable multiples, not a flat TVL haircut.
 //
 // The board covers every slug in the snapshot's watchlist (the floor, never a
 // ceiling) plus pre-token protocols below the watchlist floor: the early rows
@@ -21,12 +21,24 @@
 //                   MIN_SAMPLE live protocols fall back to the global median
 //                   over all live-token protocols (also clamped).
 //   growth        = clamp(change_7d, GROWTH_FLOOR, GROWTH_CAP) per cent
-//   growthMult    = 1 + (growth / 100) * GROWTH_WEIGHT
+//   growthMult    = 1 + (growth / 100) * (growth >= 0 ? MOMENTUM_UP : MOMENTUM_DOWN)
+//                   — momentum is asymmetric: a falling TVL discounts harder
+//                   than a rising one boosts, because a launch priced off a
+//                   shrinking protocol is the riskier bet.
 //   maturity      = MATURITY_FLOOR + min(age_days, MATURITY_DAYS)
 //                   / MATURITY_DAYS * MATURITY_RANGE
 //                   (age_days unknown: UNKNOWN_AGE_DAYS)
+//   risk          = FALLBACK_HAIRCUT when the multiple is a global fallback,
+//                   UNKNOWN_AGE_HAIRCUT when age is unknown,
+//                   MISSING_GROWTH_HAIRCUT when change_7d is missing,
+//                   floored at RISK_FLOOR — the price of what the snapshot
+//                   does not say. A row priced from its own live peers, with
+//                   a known age and a known 7-day change, carries risk 1.00.
+//   confidence    = 100 - 25 (fallback multiple) - 15 (unknown age)
+//                   - 10 (missing 7-day change): the share of the value
+//                   the snapshot actually supports, shown beside every row.
 //   implied       = max(1, round(tvl_usd * multiple(cat)
-//                   * growthMult * maturity))
+//                   * growthMult * maturity * risk))
 //
 // Why medians, not means: a few live tokens trade at absurd mcap/TVL ratios
 // (exchange tokens, tiny-TVL outliers), and a mean would let one outlier set
@@ -67,7 +79,8 @@ export interface Snapshot {
 
 /** The model's constants, as the dashboard states them. */
 export interface ModelConstants {
-  growth_weight: number;
+  momentum_up: number;
+  momentum_down: number;
   growth_floor: number;
   growth_cap: number;
   maturity_floor: number;
@@ -77,10 +90,15 @@ export interface ModelConstants {
   multiple_min: number;
   multiple_max: number;
   min_sample: number;
+  fallback_haircut: number;
+  unknown_age_haircut: number;
+  missing_growth_haircut: number;
+  risk_floor: number;
 }
 
 export const MODEL: ModelConstants = {
-  growth_weight: 0.5,
+  momentum_up: 0.6,
+  momentum_down: 0.8,
   growth_floor: -60,
   growth_cap: 120,
   maturity_floor: 0.6,
@@ -90,10 +108,14 @@ export const MODEL: ModelConstants = {
   multiple_min: 0.02,
   multiple_max: 1.0,
   min_sample: 3,
+  fallback_haircut: 0.9,
+  unknown_age_haircut: 0.95,
+  missing_growth_haircut: 0.97,
+  risk_floor: 0.85,
 };
 
 /** The model's version label: the dashboard names it. */
-export const MODEL_VERSION = 'radar-3';
+export const MODEL_VERSION = 'radar-4';
 
 /** How many pre-token protocols below the watchlist floor the early radar carries, by TVL. */
 export const EARLY_ROWS = 200;
@@ -107,6 +129,8 @@ export interface CategoryMultiple {
   multiple: number;
   sample: number;
   fallback: boolean;
+  p25: number | null;
+  p75: number | null;
 }
 
 /** The full comparable-multiple table: per-category rows plus the global median. */
@@ -121,6 +145,15 @@ export interface FarmStep {
   text: string;
   cost: string;
   time: string;
+}
+
+/** What one farm position costs in full: capital, gas across every step, setup time and hold. */
+export interface FarmBudget {
+  capital_usd: number;
+  gas_usd: number;
+  setup_minutes: number;
+  hold_days: number;
+  total_usd: number;
 }
 
 /** One row of board.json: the ranked board's row. */
@@ -146,9 +179,12 @@ export interface BoardRow {
     growth_pct: number;
     growth_multiplier: number;
     maturity_multiplier: number;
+    risk_multiplier: number;
+    confidence: number;
     age_days: number | null;
   };
   farm_steps: string[];
+  farm_budget: FarmBudget;
 }
 
 /** The dashboard's compact view of one row; the page recomputes implied value from it. */
@@ -166,8 +202,12 @@ export interface RadarRow {
   implied_value_usd: number;
   base_multiple: number;
   multiple_sample: number;
+  multiple_fallback: boolean;
   growth_multiplier: number;
   maturity_multiplier: number;
+  risk_multiplier: number;
+  confidence: number;
+  farm_budget: FarmBudget;
 }
 
 /** A live-token protocol: it already trades, so the board shows the market's own value. */
@@ -235,6 +275,16 @@ export function ageDays(asOf: string, listedAt: string | null): number | null {
   return Math.max(0, Math.floor((a - b) / DAY_MS));
 }
 
+/** The q-th percentile of a sorted list (linear interpolation); NaN when empty. */
+function percentile(sorted: number[], q: number): number {
+  if (sorted.length === 0) return NaN;
+  const at = (sorted.length - 1) * q;
+  const lo = Math.floor(at);
+  const hi = Math.ceil(at);
+  if (lo === hi) return sorted[lo]!;
+  return sorted[lo]! + (sorted[hi]! - sorted[lo]!) * (at - lo);
+}
+
 /**
  * The comparable-multiple table for this snapshot, computed once per run.
  * Live-token protocols are the comparables: mcap_usd > 0 and tvl_usd > 0.
@@ -265,10 +315,13 @@ export function computeMultiples(snapshot: Snapshot, model: ModelConstants = MOD
   for (const p of snapshot.protocols) categories.add(p.category ?? 'Other');
   const rows: CategoryMultiple[] = [...categories].sort().map((category) => {
     const peers = byCategory.get(category) ?? [];
+    const sorted = [...peers].sort((a, b) => a - b);
+    const p25 = sorted.length > 0 ? clamp(percentile(sorted, 0.25), model.multiple_min, model.multiple_max) : null;
+    const p75 = sorted.length > 0 ? clamp(percentile(sorted, 0.75), model.multiple_min, model.multiple_max) : null;
     if (peers.length >= model.min_sample) {
-      return { category, multiple: clamp(median(peers), model.multiple_min, model.multiple_max), sample: peers.length, fallback: false };
+      return { category, multiple: clamp(median(peers), model.multiple_min, model.multiple_max), sample: peers.length, fallback: false, p25, p75 };
     }
-    return { category, multiple: global, sample: peers.length, fallback: true };
+    return { category, multiple: global, sample: peers.length, fallback: true, p25, p75 };
   });
   return { global_multiple: global, global_sample: all.length, rows };
 }
@@ -278,7 +331,7 @@ export function multipleFor(category: string | null, table: MultiplesTable): Cat
   const key = category ?? 'Other';
   const found = table.rows.find((r) => r.category === key);
   if (found) return found;
-  return { category: key, multiple: table.global_multiple, sample: 0, fallback: true };
+  return { category: key, multiple: table.global_multiple, sample: 0, fallback: true, p25: null, p75: null };
 }
 
 export interface ScoredProtocol {
@@ -289,6 +342,8 @@ export interface ScoredProtocol {
   growthPct: number;
   growthMult: number;
   maturityMult: number;
+  riskMult: number;
+  confidence: number;
   age: number | null;
 }
 
@@ -302,12 +357,21 @@ export function impliedValue(
   const age = ageDays(asOf, protocol.listed_at);
   const rawGrowth = finite(protocol.change_7d, 0);
   const growthPct = clamp(rawGrowth, model.growth_floor, model.growth_cap);
-  const growthMult = 1 + (growthPct / 100) * model.growth_weight;
+  // Asymmetric momentum: a falling TVL discounts harder than a rising one boosts.
+  const growthMult = 1 + (growthPct / 100) * (growthPct >= 0 ? model.momentum_up : model.momentum_down);
   const ageForModel = age ?? model.unknown_age_days;
   const maturityMult =
     model.maturity_floor + (clamp(ageForModel, 0, model.maturity_days) / model.maturity_days) * model.maturity_range;
   const priced = multipleFor(protocol.category, table);
-  const implied = Math.max(1, Math.round(protocol.tvl_usd * priced.multiple * growthMult * maturityMult));
+  // Risk haircut: the price of what the snapshot does not say — a fallback
+  // multiple, an unknown age, a missing 7-day change each discount the value.
+  let riskMult = 1;
+  if (priced.fallback) riskMult *= model.fallback_haircut;
+  if (age === null) riskMult *= model.unknown_age_haircut;
+  if (protocol.change_7d === null) riskMult *= model.missing_growth_haircut;
+  riskMult = Math.max(model.risk_floor, riskMult);
+  const confidence = 100 - (priced.fallback ? 25 : 0) - (age === null ? 15 : 0) - (protocol.change_7d === null ? 10 : 0);
+  const implied = Math.max(1, Math.round(protocol.tvl_usd * priced.multiple * growthMult * maturityMult * riskMult));
   return {
     implied,
     multiple: priced.multiple,
@@ -316,6 +380,8 @@ export function impliedValue(
     growthPct,
     growthMult,
     maturityMult,
+    riskMult,
+    confidence,
     age,
   };
 }
@@ -403,9 +469,12 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
       growth_pct: round4(entry.s.growthPct),
       growth_multiplier: round4(entry.s.growthMult),
       maturity_multiplier: round4(entry.s.maturityMult),
+      risk_multiplier: round4(entry.s.riskMult),
+      confidence: entry.s.confidence,
       age_days: entry.s.age,
     },
     farm_steps: farmSteps(entry.p, entry.s.age).map(stepText),
+    farm_budget: farmBudget(entry.p, entry.s.age),
   }));
 }
 
@@ -624,6 +693,23 @@ export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
   ];
 }
 
+/**
+ * What one farm position costs in full, from the same figures the steps use:
+ * the capital the family's main action needs, the gas of every step (first
+ * transaction, core action, second action, weekly actions across the hold,
+ * governance vote), 65 minutes of setup and the hold in days. The dashboard
+ * shows this as one budget box so the plan is a concrete amount, not a vibe.
+ */
+export function farmBudget(p: SnapshotProtocol, age: number | null): FarmBudget {
+  const capital = capitalFor(p);
+  const hold = holdDaysFor(age);
+  const coreGas = capital >= 150 ? 8 : 4;
+  const secondGas = Math.max(2, Math.round(capital / 20));
+  const weeklyGas = 2 * Math.ceil(hold / 7);
+  const gas = 3 + coreGas + secondGas + weeklyGas + 1;
+  return { capital_usd: capital, gas_usd: gas, setup_minutes: 65, hold_days: hold, total_usd: capital + gas };
+}
+
 /** The live-token protocols, by market cap, for the dashboard's Live token view. */
 export function liveRows(snapshot: Snapshot): LiveRow[] {
   return snapshot.protocols
@@ -657,8 +743,12 @@ export function radarRow(row: BoardRow): RadarRow {
     implied_value_usd: row.implied_value_usd,
     base_multiple: row.model.base_multiple,
     multiple_sample: row.model.multiple_sample,
+    multiple_fallback: row.model.multiple_fallback,
     growth_multiplier: row.model.growth_multiplier,
     maturity_multiplier: row.model.maturity_multiplier,
+    risk_multiplier: row.model.risk_multiplier,
+    confidence: row.model.confidence,
+    farm_budget: row.farm_budget,
   };
 }
 

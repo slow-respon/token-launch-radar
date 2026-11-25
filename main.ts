@@ -1,4 +1,7 @@
-// Token Radar entry (Node 22, standard library only) — model radar-2.
+// Token Radar entry (Node 22, standard library only) — model radar-4: asymmetric
+// momentum, a risk haircut for what the snapshot does not say, a confidence
+// score per row, a farm budget per protocol, and peer-range data for the
+// dashboard's comparison view.
 //
 // The program reads the sealed snapshot from /input/snapshot.json (or
 // --input <file|dir>), scores every pre-token protocol with the comparable-
@@ -95,8 +98,10 @@ writeFileSync(join(out, 'dossier.json'), buildDossier(out, { text_max_bytes: TEX
 const top = board[0]!;
 const totalImplied = board.reduce((sum, r) => sum + r.implied_value_usd, 0);
 const pricedCategories = radar.multiples.filter((m) => !m.fallback).length;
+const fullConfidence = board.filter((r) => r.model.confidence === 100).length;
 process.stdout.write(
   `token radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, ${board.length} rows scored (${radar.early_size} early, ${radar.live_size} live set aside)\n` +
     `token radar: top rank is ${top.slug} at $${top.implied_value_usd.toLocaleString('en-US')} implied; board total $${totalImplied.toLocaleString('en-US')}; global comparable multiple ${radar.global_multiple}x (${pricedCategories} categories priced from live peers, ${radar.multiples.length - pricedCategories} on the global fallback)\n` +
+    `token radar: model ${radar.model_version}: ${fullConfidence} of ${board.length} rows at full confidence 100, the rest discounted for a fallback multiple, an unknown age or a missing 7-day change\n` +
     `token radar: wrote ${join(out, 'board.json')}, ${join(out, 'data.js')}, ${join(out, 'dashboard')} (${dashboardFiles.length} files), ${join(out, 'screenshots')} (${shots.length} images) and ${join(out, 'dossier.json')}\n`,
 );
